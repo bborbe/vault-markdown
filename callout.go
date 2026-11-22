@@ -57,20 +57,14 @@ func (t *calloutTransformer) Transform(doc *ast.Document, reader text.Reader, _ 
 	}
 }
 
-// firstLine concatenates the text nodes of a paragraph's first line.
-func firstLine(paragraph ast.Node, source []byte) string {
-	var b strings.Builder
-	for child := paragraph.FirstChild(); child != nil; child = child.NextSibling() {
-		t, ok := child.(*ast.Text)
-		if !ok {
-			break
-		}
-		b.Write(t.Value(source))
-		if t.SoftLineBreak() {
-			break
-		}
+// rawFirstLine returns the source text of a block's first line, markup included.
+func rawFirstLine(block ast.Node, source []byte) (string, int) {
+	lines := block.Lines()
+	if lines.Len() == 0 {
+		return "", -1
 	}
-	return b.String()
+	segment := lines.At(0)
+	return string(source[segment.Start:segment.Stop]), segment.Stop
 }
 
 // calloutMarker returns the callout type when the blockquote starts with
@@ -80,32 +74,34 @@ func calloutMarker(bq *ast.Blockquote, source []byte) string {
 	if paragraph == nil || paragraph.Kind() != ast.KindParagraph {
 		return ""
 	}
-	value := firstLine(paragraph, source)
-	if !strings.HasPrefix(value, "[!") {
+	line, _ := rawFirstLine(paragraph, source)
+	if !strings.HasPrefix(line, "[!") {
 		return ""
 	}
-	end := strings.Index(value, "]")
+	end := strings.Index(line, "]")
 	if end < 0 {
 		return ""
 	}
-	return value[2:end]
+	return line[2:end]
 }
 
 func replaceWithCallout(bq *ast.Blockquote, source []byte) {
 	marker := calloutMarker(bq, source)
-	callout := &calloutNode{CalloutType: marker, Title: calloutTitle(bq, source, marker)}
+	line, lineEnd := rawFirstLine(bq.FirstChild(), source)
+	callout := &calloutNode{CalloutType: marker, Title: calloutTitle(line, marker)}
 	bq.Parent().ReplaceChild(bq.Parent(), bq, callout)
 	moveChildren(bq, callout)
-	stripMarker(callout)
+	stripMarker(callout, lineEnd)
 }
 
-func calloutTitle(bq *ast.Blockquote, source []byte, marker string) string {
-	value := firstLine(bq.FirstChild(), source)
-	index := strings.Index(value, "[!"+marker+"]")
+// calloutTitle returns the text after [!type], without Obsidian's fold marker.
+func calloutTitle(line, marker string) string {
+	index := strings.Index(line, "[!"+marker+"]")
 	if index < 0 {
 		return ""
 	}
-	return strings.TrimSpace(value[index+len(marker)+3:])
+	title := strings.TrimSpace(line[index+len(marker)+3:])
+	return strings.TrimLeft(title, "-+ ")
 }
 
 func moveChildren(from, to ast.Node) {
@@ -116,22 +112,29 @@ func moveChildren(from, to ast.Node) {
 	}
 }
 
+// nodeStart returns the source offset where a node's text begins.
+func nodeStart(n ast.Node) int {
+	if textNode, ok := n.(*ast.Text); ok {
+		return textNode.Segment.Start
+	}
+	for child := n.FirstChild(); child != nil; child = child.NextSibling() {
+		if start := nodeStart(child); start >= 0 {
+			return start
+		}
+	}
+	return -1
+}
+
 // stripMarker removes the [!type] title line so it is not repeated in the body.
-func stripMarker(callout *calloutNode) {
+func stripMarker(callout *calloutNode, firstLineEnd int) {
 	paragraph := callout.FirstChild()
-	if paragraph == nil {
+	if paragraph == nil || firstLineEnd < 0 {
 		return
 	}
 	for child := paragraph.FirstChild(); child != nil; {
 		next := child.NextSibling()
-		textNode, ok := child.(*ast.Text)
-		if !ok {
-			break
-		}
-		lastOfLine := textNode.SoftLineBreak()
-		paragraph.RemoveChild(paragraph, child)
-		if lastOfLine {
-			break
+		if start := nodeStart(child); start >= 0 && start < firstLineEnd {
+			paragraph.RemoveChild(paragraph, child)
 		}
 		child = next
 	}
@@ -156,7 +159,7 @@ func (c *converter) renderCallout(
 		`<div class="callout" data-callout="` + html.EscapeString(n.CalloutType) + `">` + "\n",
 	)
 	if n.Title != "" {
-		fmt.Fprintf(w, "<p class=\"callout-title\">%s</p>\n", html.EscapeString(n.Title))
+		_, _ = fmt.Fprintf(w, "<p class=\"callout-title\">%s</p>\n", html.EscapeString(n.Title))
 	}
 	return ast.WalkContinue, nil
 }

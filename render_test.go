@@ -97,6 +97,14 @@ var _ = Describe("Renderer", func() {
 		out := render(fixture("a"))
 		Expect(out).To(ContainSubstring("b-body"))
 		Expect(out).NotTo(ContainSubstring("c-body"))
+		Expect(out).NotTo(ContainSubstring("![[c]]"))
+	})
+
+	It("does not inline the embedded page's frontmatter", func() {
+		out := render(fixture("embed_frontmatter"))
+		Expect(out).To(ContainSubstring("embedded body"))
+		Expect(out).NotTo(ContainSubstring(`<table class="frontmatter">`))
+		Expect(out).NotTo(ContainSubstring("embedded-status"))
 	})
 
 	It("renders a live vault page with its frontmatter, table and wikilinks", func() {
@@ -110,5 +118,36 @@ var _ = Describe("Renderer", func() {
 		out, err := markdown.New().Render(ctx, "[[Page]]")
 		Expect(err).To(BeNil())
 		Expect(out).To(ContainSubstring(`<span class="wikilink missing">Page</span>`))
+	})
+
+	It("accepts CRLF line endings around the frontmatter", func() {
+		out := render("---\r\nstatus: active\r\n---\r\n\r\nbody text\r\n")
+		Expect(out).To(ContainSubstring(`<table class="frontmatter">`))
+		Expect(out).To(ContainSubstring("<td>status</td><td>active</td>"))
+		Expect(out).To(ContainSubstring("body text"))
+	})
+
+	It("returns an error for malformed frontmatter instead of panicking", func() {
+		_, err := markdown.New().Render(ctx, "---\nstatus: [unclosed\n---\n\nbody\n")
+		Expect(err).NotTo(BeNil())
+	})
+
+	It("renders a callout without a title", func() {
+		out := render("> [!warning]\n> body only\n")
+		Expect(out).To(ContainSubstring(`data-callout="warning"`))
+		Expect(out).To(ContainSubstring("body only"))
+		Expect(out).NotTo(ContainSubstring("callout-title"))
+	})
+
+	It("drops Obsidian's fold marker from the callout title", func() {
+		out := render("> [!note]- Folded Title\n> body\n")
+		Expect(out).To(ContainSubstring(`<p class="callout-title">Folded Title</p>`))
+	})
+
+	It("keeps the title when it carries inline markup", func() {
+		out := render("> [!note] **Bold** title\n> body\n")
+		Expect(out).To(ContainSubstring("callout-title"))
+		Expect(out).To(ContainSubstring("Bold"))
+		Expect(out).To(ContainSubstring("body"))
 	})
 })

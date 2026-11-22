@@ -7,13 +7,13 @@ package markdown
 import (
 	"bytes"
 	"context"
+	"strings"
 
 	"github.com/bborbe/errors"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/parser"
-	"github.com/yuin/goldmark/renderer"
-	"github.com/yuin/goldmark/renderer/html"
+	grenderer "github.com/yuin/goldmark/renderer"
 	"github.com/yuin/goldmark/util"
 )
 
@@ -41,37 +41,40 @@ type PagesFunc func(name string) (string, bool)
 // Page implements Pages.
 func (f PagesFunc) Page(name string) (string, bool) { return f(name) }
 
-// Option configures a Renderer.
-type Option func(*Renderer)
-
-// WithResolver sets the wikilink resolver. Without one every wikilink is missing.
-func WithResolver(r Resolver) Option {
-	return func(rd *Renderer) { rd.resolver = r }
-}
-
-// WithPages sets the source used to expand ![[embeds]]. Without one an embed renders nothing.
-func WithPages(p Pages) Option {
-	return func(rd *Renderer) { rd.pages = p }
-}
-
 // Renderer renders Obsidian-flavoured markdown to HTML.
-type Renderer struct {
+type Renderer interface {
+	// Render renders source to HTML.
+	Render(ctx context.Context, source string) (string, error)
+}
+
+type renderer struct {
 	resolver Resolver
 	pages    Pages
 }
 
+// Option configures a Renderer.
+type Option func(*renderer)
+
+// WithResolver sets the wikilink resolver. Without one every wikilink is missing.
+func WithResolver(r Resolver) Option {
+	return func(rd *renderer) { rd.resolver = r }
+}
+
+// WithPages sets the source used to expand ![[embeds]]. Without one an embed is dropped.
+func WithPages(p Pages) Option {
+	return func(rd *renderer) { rd.pages = p }
+}
+
 // New returns a Renderer configured with opts.
-func New(opts ...Option) *Renderer {
-	r := &Renderer{}
+func New(opts ...Option) Renderer {
+	r := &renderer{}
 	for _, o := range opts {
 		o(r)
 	}
 	return r
 }
 
-// Render renders source to HTML: frontmatter as a table, GFM tables and task
-// lists, callouts, one level of ![[embeds]], and resolved [[wikilinks]].
-func (r *Renderer) Render(ctx context.Context, source string) (string, error) {
+func (r *renderer) Render(ctx context.Context, source string) (string, error) {
 	c := &converter{ctx: ctx, resolver: r.resolver, pages: r.pages}
 	return c.render(source)
 }
@@ -85,16 +88,57 @@ type converter struct {
 }
 
 func (c *converter) render(source string) (string, error) {
+	source = normalizeNewlines(source)
 	front, body := splitFrontmatter(source)
 	table, err := renderFrontmatter(c.ctx, front)
 	if err != nil {
 		return "", err
 	}
-	converted, err := c.convert(body)
+	converted, err := c.convert(c.expandEmbeds(body))
 	if err != nil {
 		return "", err
 	}
 	return table + converted, nil
+}
+
+// expandEmbeds replaces a line holding only ![[page]] with that page's body.
+// Expansion stops after one level: an embed inside the inlined body is dropped.
+func (c *converter) expandEmbeds(body string) string {
+	if c.pages == nil {
+		return body
+	}
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		target, ok := loneEmbed(line)
+		if !ok {
+			continue
+		}
+		if c.depth > 0 {
+			lines[i] = ""
+			continue
+		}
+		content, found := c.pages.Page(target)
+		if !found {
+			continue
+		}
+		child := &converter{ctx: c.ctx, resolver: c.resolver, pages: c.pages, depth: c.depth + 1}
+		_, inner := splitFrontmatter(normalizeNewlines(content))
+		lines[i] = child.expandEmbeds(inner)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// loneEmbed reports whether line is nothing but an ![[target]] embed.
+func loneEmbed(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "![[") || !strings.HasSuffix(trimmed, "]]") {
+		return "", false
+	}
+	target := strings.TrimSpace(trimmed[3 : len(trimmed)-2])
+	if target == "" || strings.ContainsAny(target, "[]") {
+		return "", false
+	}
+	return target, true
 }
 
 func (c *converter) convert(source string) (string, error) {
@@ -104,10 +148,7 @@ func (c *converter) convert(source string) (string, error) {
 			parser.WithInlineParsers(util.Prioritized(&wikilinkParser{}, 100)),
 			parser.WithASTTransformers(util.Prioritized(&calloutTransformer{}, 100)),
 		),
-		goldmark.WithRendererOptions(
-			html.WithUnsafe(),
-			renderer.WithNodeRenderers(util.Prioritized(c, 100)),
-		),
+		goldmark.WithRendererOptions(grenderer.WithNodeRenderers(util.Prioritized(c, 100))),
 	)
 	var buf bytes.Buffer
 	if err := md.Convert([]byte(source), &buf); err != nil {
@@ -117,7 +158,7 @@ func (c *converter) convert(source string) (string, error) {
 }
 
 // RegisterFuncs implements renderer.NodeRenderer.
-func (c *converter) RegisterFuncs(reg renderer.NodeRendererFuncRegisterer) {
+func (c *converter) RegisterFuncs(reg grenderer.NodeRendererFuncRegisterer) {
 	reg.Register(KindWikilink, c.renderWikilink)
 	reg.Register(KindEmbed, c.renderEmbed)
 	reg.Register(KindCallout, c.renderCallout)

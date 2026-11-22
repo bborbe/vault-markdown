@@ -22,6 +22,22 @@ var _ = Describe("Backlinks", func() {
 		Expect(links).To(Equal([]string{"alpha.md", "zeta.md"}))
 	})
 
+	It("counts a heading-anchor link", func() {
+		links := markdown.Backlinks(map[string]string{"one.md": "see [[A#Heading]]"}, "A")
+		Expect(links).To(Equal([]string{"one.md"}))
+	})
+
+	It("ignores links inside code and frontmatter", func() {
+		links := markdown.Backlinks(map[string]string{
+			"fenced.md":       "```\n[[A]]\n```\n",
+			"inline.md":       "use `[[A]]` literally",
+			"front.md":        "---\nrelated: '[[A]]'\n---\n\nbody\n",
+			"real.md":         "see [[A]]",
+			"tilde-fenced.md": "~~~\n[[A]]\n~~~\n",
+		}, "A")
+		Expect(links).To(Equal([]string{"real.md"}))
+	})
+
 	It("returns nothing when no page links to the target", func() {
 		Expect(markdown.Backlinks(map[string]string{"one.md": "plain"}, "A")).To(BeEmpty())
 	})

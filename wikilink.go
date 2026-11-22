@@ -17,7 +17,7 @@ import (
 // KindWikilink is the node kind for a [[wikilink]].
 var KindWikilink = ast.NewNodeKind("Wikilink")
 
-// KindEmbed is the node kind for an ![[embed]].
+// KindEmbed is the node kind for an inline ![[embed]].
 var KindEmbed = ast.NewNodeKind("Embed")
 
 type wikilinkNode struct {
@@ -139,26 +139,10 @@ func (c *converter) resolve(n *wikilinkNode) (string, bool) {
 	return href, true
 }
 
-// renderEmbed inlines the target page one level deep; a nested embed renders nothing.
+// renderEmbed drops an inline ![[embed]]; block-level embeds are expanded
+// before parsing, so only the nested or mid-sentence form reaches this point.
 func (c *converter) renderEmbed(
-	w util.BufWriter, _ []byte, node ast.Node, entering bool,
+	_ util.BufWriter, _ []byte, _ ast.Node, _ bool,
 ) (ast.WalkStatus, error) {
-	if !entering || c.depth > 0 || c.pages == nil {
-		return ast.WalkContinue, nil
-	}
-	n, ok := node.(*wikilinkNode)
-	if !ok {
-		return ast.WalkContinue, nil
-	}
-	content, found := c.pages.Page(n.Target)
-	if !found {
-		return ast.WalkContinue, nil
-	}
-	child := &converter{resolver: c.resolver, pages: c.pages, depth: c.depth + 1}
-	rendered, err := child.render(content)
-	if err != nil {
-		return ast.WalkContinue, err
-	}
-	_, _ = w.WriteString(rendered)
 	return ast.WalkContinue, nil
 }

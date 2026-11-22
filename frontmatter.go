@@ -16,6 +16,10 @@ import (
 
 const frontmatterDelimiter = "---"
 
+func normalizeNewlines(source string) string {
+	return strings.ReplaceAll(source, "\r\n", "\n")
+}
+
 // splitFrontmatter separates a leading YAML frontmatter block from the body.
 // A source without frontmatter returns an empty front and the source unchanged.
 func splitFrontmatter(source string) (string, string) {
@@ -23,6 +27,9 @@ func splitFrontmatter(source string) (string, string) {
 		return "", source
 	}
 	rest := source[len(frontmatterDelimiter)+1:]
+	if strings.HasPrefix(rest, frontmatterDelimiter) {
+		return "", strings.TrimPrefix(rest[len(frontmatterDelimiter):], "\n")
+	}
 	end := strings.Index(rest, "\n"+frontmatterDelimiter)
 	if end < 0 {
 		return "", source
