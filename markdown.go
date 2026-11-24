@@ -90,7 +90,7 @@ type converter struct {
 func (c *converter) render(source string) (string, error) {
 	source = normalizeNewlines(source)
 	front, body := splitFrontmatter(source)
-	table, err := renderFrontmatter(c.ctx, front)
+	table, err := renderFrontmatter(c.ctx, front, c.resolver)
 	if err != nil {
 		return "", err
 	}
