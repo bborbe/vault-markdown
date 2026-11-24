@@ -93,6 +93,40 @@ var _ = Describe("Renderer", func() {
 		Expect(out).NotTo(ContainSubstring(`[[Missing]]`))
 	})
 
+	It("renders an unquoted wikilink list instead of failing the page", func() {
+		out := render(fixture("frontmatter_bare_wikilinks"))
+		Expect(out).To(ContainSubstring(`<table class="frontmatter">`))
+		Expect(out).To(ContainSubstring(
+			`<td>tags</td><td><a class="wikilink" href="/p/Page">Page</a> ` +
+				`<span class="wikilink missing">Missing</span></td>`,
+		))
+		Expect(out).To(ContainSubstring(
+			`<td>aliases</td><td><a class="wikilink" href="/p/Page">Page</a> ` +
+				`<span class="wikilink missing">Missing</span></td>`,
+		))
+		Expect(out).NotTo(ContainSubstring(`[[Page]]`))
+	})
+
+	It("keeps a backslash in an unquoted wikilink value intact", func() {
+		out := render("---\ntags: [[Page\\Missing]]\n---\n\nbody\n")
+		Expect(out).To(ContainSubstring(`<span class="wikilink missing">Page\Missing</span>`))
+	})
+
+	It("leaves a block scalar's body untouched", func() {
+		out := render(
+			"---\n" +
+				"notes: |\n" +
+				"  - [[Page]] [[Missing]]\n" +
+				"tags: [[Page]] [[Missing]]\n" +
+				"---\n\nbody\n",
+		)
+		Expect(out).NotTo(ContainSubstring(`&quot;[[`))
+		Expect(out).To(ContainSubstring(
+			`<td>tags</td><td><a class="wikilink" href="/p/Page">Page</a> ` +
+				`<span class="wikilink missing">Missing</span></td>`,
+		))
+	})
+
 	It("renders a callout, not a plain blockquote", func() {
 		out := render(fixture("page"))
 		Expect(out).To(ContainSubstring(`<div class="callout" data-callout="note">`))

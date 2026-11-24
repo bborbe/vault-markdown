@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- fix: quote a frontmatter value made only of bare `[[wikilinks]]` — `tags: [[Go]] [[Trading]]`, or a `- [[A]] [[B]]` list item — before parsing, so the page renders instead of failing the whole frontmatter with a YAML parse error. Obsidian accepts that unquoted shape, YAML reads the second `[[…]]` on the line as a syntax error, and the page view answered 500 for every page carrying it.
+
 ## v0.1.1
 
 - fix: render `[[wikilinks]]` in frontmatter values as anchors (quoted scalar, quoted list, and inline unquoted forms) instead of escaped literal text, reusing the configured resolver; unresolved targets render the same `wikilink missing` marker the body uses.
