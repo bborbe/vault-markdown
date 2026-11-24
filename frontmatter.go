@@ -25,11 +25,17 @@ const frontmatterDelimiter = "---"
 // mapping line or on a block-list item — and quote it, which parses.
 var (
 	bareWikilinkMapping = regexp.MustCompile(
-		`(?m)^([ \t]*[A-Za-z0-9_.-]+:[ \t]*)` +
+		`^([ \t]*[A-Za-z0-9_.-]+:[ \t]*)` +
 			`(\[\[[^\]\n]*\]\](?:[ \t]+\[\[[^\]\n]*\]\])*)[ \t]*$`,
 	)
 	bareWikilinkListItem = regexp.MustCompile(
-		`(?m)^([ \t]*-[ \t]+)(\[\[[^\]\n]*\]\](?:[ \t]+\[\[[^\]\n]*\]\])*)[ \t]*$`,
+		`^([ \t]*-[ \t]+)(\[\[[^\]\n]*\]\](?:[ \t]+\[\[[^\]\n]*\]\])*)[ \t]*$`,
+	)
+	// blockScalarHeader matches a key that opens a literal or folded block, so
+	// the scanner can leave the block's lines alone: they are content, not YAML,
+	// and quoting one would change what the page displays.
+	blockScalarHeader = regexp.MustCompile(
+		`^[ \t]*(?:-[ \t]+)?[A-Za-z0-9_.-]+:[ \t]*[|>][+-]?[0-9]?[ \t]*$`,
 	)
 )
 
@@ -39,11 +45,77 @@ func normalizeNewlines(source string) string {
 
 // quoteBareWikilinks quotes each value that is nothing but bare `[[…]]` groups,
 // so Obsidian's unquoted wikilink shape parses as YAML instead of failing the
-// page. Any other line is left byte-identical, so genuinely malformed YAML
-// still reports its parse error.
+// page. It rewrites line by line and skips two regions whose lines are content
+// rather than YAML — a block scalar's body and a multi-line quoted scalar — so
+// it can only ever add quotes to a real mapping value. Any other line is left
+// byte-identical, so genuinely malformed YAML still reports its parse error.
 func quoteBareWikilinks(front string) string {
-	front = quoteBareWikilinkMatches(front, bareWikilinkMapping)
-	return quoteBareWikilinkMatches(front, bareWikilinkListItem)
+	lines := strings.Split(front, "\n")
+	out := make([]string, 0, len(lines))
+	blockIndent := -1
+	inQuoted := false
+	for _, line := range lines {
+		indent := leadingIndent(line)
+		if blockIndent >= 0 {
+			// A block scalar runs until a non-blank line is indented no further
+			// than the key that opened it.
+			if strings.TrimSpace(line) != "" && indent <= blockIndent {
+				blockIndent = -1
+			} else {
+				out = append(out, line)
+				continue
+			}
+		}
+		if inQuoted {
+			if hasUnclosedQuote(line) {
+				inQuoted = false
+			}
+			out = append(out, line)
+			continue
+		}
+		if blockScalarHeader.MatchString(line) {
+			blockIndent = indent
+			out = append(out, line)
+			continue
+		}
+		if hasUnclosedQuote(line) {
+			inQuoted = true
+			out = append(out, line)
+			continue
+		}
+		out = append(out, quoteBareWikilinkLine(line))
+	}
+	return strings.Join(out, "\n")
+}
+
+// quoteBareWikilinkLine quotes one already-safe line when its value is nothing
+// but bare `[[…]]` groups.
+func quoteBareWikilinkLine(line string) string {
+	line = quoteBareWikilinkMatches(line, bareWikilinkMapping)
+	return quoteBareWikilinkMatches(line, bareWikilinkListItem)
+}
+
+// leadingIndent counts a line's leading spaces and tabs.
+func leadingIndent(line string) int {
+	return len(line) - len(strings.TrimLeft(line, " \t"))
+}
+
+// hasUnclosedQuote reports whether a line ends inside a double-quoted scalar —
+// an odd number of unescaped quotes means the value continues on the next line.
+func hasUnclosedQuote(line string) bool {
+	quotes := 0
+	escaped := false
+	for _, r := range line {
+		switch {
+		case escaped:
+			escaped = false
+		case r == '\\':
+			escaped = true
+		case r == '"':
+			quotes++
+		}
+	}
+	return quotes%2 == 1
 }
 
 func quoteBareWikilinkMatches(front string, pattern *regexp.Regexp) string {

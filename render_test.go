@@ -112,6 +112,21 @@ var _ = Describe("Renderer", func() {
 		Expect(out).To(ContainSubstring(`<span class="wikilink missing">Page\Missing</span>`))
 	})
 
+	It("leaves a block scalar's body untouched", func() {
+		out := render(
+			"---\n" +
+				"notes: |\n" +
+				"  - [[Page]] [[Missing]]\n" +
+				"tags: [[Page]] [[Missing]]\n" +
+				"---\n\nbody\n",
+		)
+		Expect(out).NotTo(ContainSubstring(`&quot;[[`))
+		Expect(out).To(ContainSubstring(
+			`<td>tags</td><td><a class="wikilink" href="/p/Page">Page</a> ` +
+				`<span class="wikilink missing">Missing</span></td>`,
+		))
+	})
+
 	It("renders a callout, not a plain blockquote", func() {
 		out := render(fixture("page"))
 		Expect(out).To(ContainSubstring(`<div class="callout" data-callout="note">`))
