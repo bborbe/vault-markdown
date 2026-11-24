@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased
+## v0.1.1
 
 - fix: render `[[wikilinks]]` in frontmatter values as anchors (quoted scalar, quoted list, and inline unquoted forms) instead of escaped literal text, reusing the configured resolver; unresolved targets render the same `wikilink missing` marker the body uses.
 
