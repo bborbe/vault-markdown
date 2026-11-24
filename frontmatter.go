@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"html"
+	"regexp"
 	"strings"
 
 	"github.com/bborbe/errors"
@@ -16,8 +17,40 @@ import (
 
 const frontmatterDelimiter = "---"
 
+// Obsidian accepts an unquoted wikilink value, and a whole list of them on one
+// line: `tags: [[Go]] [[Trading]]`. YAML reads the first `[[Go]]` as a flow
+// sequence and then rejects the second one on the same line, so before this
+// tolerance the whole page failed to render. The two patterns match exactly
+// that shape — a value made only of `[[…]]` groups separated by spaces, on a
+// mapping line or on a block-list item — and quote it, which parses.
+var (
+	bareWikilinkMapping = regexp.MustCompile(
+		`(?m)^([ \t]*[A-Za-z0-9_.-]+:[ \t]*)` +
+			`(\[\[[^\]\n]*\]\](?:[ \t]+\[\[[^\]\n]*\]\])*)[ \t]*$`,
+	)
+	bareWikilinkListItem = regexp.MustCompile(
+		`(?m)^([ \t]*-[ \t]+)(\[\[[^\]\n]*\]\](?:[ \t]+\[\[[^\]\n]*\]\])*)[ \t]*$`,
+	)
+)
+
 func normalizeNewlines(source string) string {
 	return strings.ReplaceAll(source, "\r\n", "\n")
+}
+
+// quoteBareWikilinks quotes each value that is nothing but bare `[[…]]` groups,
+// so Obsidian's unquoted wikilink shape parses as YAML instead of failing the
+// page. Any other line is left byte-identical, so genuinely malformed YAML
+// still reports its parse error.
+func quoteBareWikilinks(front string) string {
+	front = quoteBareWikilinkMatches(front, bareWikilinkMapping)
+	return quoteBareWikilinkMatches(front, bareWikilinkListItem)
+}
+
+func quoteBareWikilinkMatches(front string, pattern *regexp.Regexp) string {
+	return pattern.ReplaceAllStringFunc(front, func(match string) string {
+		parts := pattern.FindStringSubmatch(match)
+		return parts[1] + `"` + strings.ReplaceAll(parts[2], `"`, `\"`) + `"`
+	})
 }
 
 // splitFrontmatter separates a leading YAML frontmatter block from the body.
@@ -47,7 +80,7 @@ func renderFrontmatter(ctx context.Context, front string, resolver Resolver) (st
 		return "", nil
 	}
 	var doc yaml.Node
-	if err := yaml.Unmarshal([]byte(front), &doc); err != nil {
+	if err := yaml.Unmarshal([]byte(quoteBareWikilinks(front)), &doc); err != nil {
 		return "", errors.Wrap(ctx, err, "parse frontmatter")
 	}
 	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
