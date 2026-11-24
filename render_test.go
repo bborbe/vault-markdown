@@ -107,6 +107,11 @@ var _ = Describe("Renderer", func() {
 		Expect(out).NotTo(ContainSubstring(`[[Page]]`))
 	})
 
+	It("keeps a backslash in an unquoted wikilink value intact", func() {
+		out := render("---\ntags: [[Page\\Missing]]\n---\n\nbody\n")
+		Expect(out).To(ContainSubstring(`<span class="wikilink missing">Page\Missing</span>`))
+	})
+
 	It("renders a callout, not a plain blockquote", func() {
 		out := render(fixture("page"))
 		Expect(out).To(ContainSubstring(`<div class="callout" data-callout="note">`))

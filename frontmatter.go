@@ -49,7 +49,13 @@ func quoteBareWikilinks(front string) string {
 func quoteBareWikilinkMatches(front string, pattern *regexp.Regexp) string {
 	return pattern.ReplaceAllStringFunc(front, func(match string) string {
 		parts := pattern.FindStringSubmatch(match)
-		return parts[1] + `"` + strings.ReplaceAll(parts[2], `"`, `\"`) + `"`
+		// A double-quoted YAML scalar treats `\` as an escape introducer, so a
+		// backslash in the value must be doubled before the quote is escaped —
+		// otherwise a value that rendered fine unquoted comes back corrupted or
+		// fails to parse.
+		value := strings.ReplaceAll(parts[2], `\`, `\\`)
+		value = strings.ReplaceAll(value, `"`, `\"`)
+		return parts[1] + `"` + value + `"`
 	})
 }
 
