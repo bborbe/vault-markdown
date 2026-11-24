@@ -40,7 +40,9 @@ func splitFrontmatter(source string) (string, string) {
 }
 
 // renderFrontmatter renders a YAML frontmatter block as a two-column table.
-func renderFrontmatter(ctx context.Context, front string) (string, error) {
+// resolver, when set, turns a wikilink value into a link the same way the body
+// renderer does; without one every wikilink value is marked missing.
+func renderFrontmatter(ctx context.Context, front string, resolver Resolver) (string, error) {
 	if strings.TrimSpace(front) == "" {
 		return "", nil
 	}
@@ -54,40 +56,125 @@ func renderFrontmatter(ctx context.Context, front string) (string, error) {
 	var b strings.Builder
 	b.WriteString(`<table class="frontmatter">` + "\n")
 	b.WriteString("<thead><tr><th>Key</th><th>Value</th></tr></thead>\n<tbody>\n")
-	writeFrontmatterRows(&b, doc.Content[0])
+	writeFrontmatterRows(&b, doc.Content[0], resolver)
 	b.WriteString("</tbody>\n</table>\n")
 	return b.String(), nil
 }
 
-func writeFrontmatterRows(b *strings.Builder, mapping *yaml.Node) {
+// writeFrontmatterRows writes one row per mapping entry. The key is escaped;
+// the value is already safe HTML from frontmatterValue (text escaped, links
+// emitted as markup), so it is written as-is.
+func writeFrontmatterRows(b *strings.Builder, mapping *yaml.Node, resolver Resolver) {
 	for i := 0; i+1 < len(mapping.Content); i += 2 {
 		key := mapping.Content[i].Value
-		value := frontmatterValue(mapping.Content[i+1])
+		value := frontmatterValue(mapping.Content[i+1], resolver)
 		fmt.Fprintf(
 			b,
 			"<tr><td>%s</td><td>%s</td></tr>\n",
 			html.EscapeString(key),
-			html.EscapeString(value),
+			value,
 		)
 	}
 }
 
-// frontmatterValue flattens a YAML node to a single cell value.
-func frontmatterValue(n *yaml.Node) string {
+// frontmatterValue flattens a YAML node to a single cell value as safe HTML.
+// A wikilink value renders as an anchor; everything else is escaped text.
+func frontmatterValue(n *yaml.Node, resolver Resolver) string {
 	switch n.Kind {
 	case yaml.SequenceNode:
+		// Inline unquoted `key: [[Page]]` is valid YAML flow syntax and parses
+		// as a sequence holding one sequence holding one scalar, so the
+		// brackets are already gone. Reconstruct the wikilink.
+		if len(n.Content) == 1 && isSingleScalarSequence(n.Content[0]) {
+			return renderFrontmatterScalar("[["+n.Content[0].Content[0].Value+"]]", resolver)
+		}
 		parts := make([]string, 0, len(n.Content))
 		for _, item := range n.Content {
-			parts = append(parts, frontmatterValue(item))
+			parts = append(parts, frontmatterValue(item, resolver))
 		}
 		return strings.Join(parts, ", ")
 	case yaml.MappingNode:
 		parts := make([]string, 0, len(n.Content)/2)
 		for i := 0; i+1 < len(n.Content); i += 2 {
-			parts = append(parts, n.Content[i].Value+": "+frontmatterValue(n.Content[i+1]))
+			parts = append(
+				parts,
+				html.EscapeString(
+					n.Content[i].Value,
+				)+": "+frontmatterValue(
+					n.Content[i+1],
+					resolver,
+				),
+			)
 		}
 		return strings.Join(parts, ", ")
 	default:
-		return n.Value
+		return renderFrontmatterScalar(n.Value, resolver)
 	}
+}
+
+// isSingleScalarSequence reports whether n is a sequence holding exactly one
+// scalar — the shape an inline `[[Page]]` value parses to.
+func isSingleScalarSequence(n *yaml.Node) bool {
+	return n.Kind == yaml.SequenceNode && len(n.Content) == 1 &&
+		n.Content[0].Kind == yaml.ScalarNode
+}
+
+// renderFrontmatterScalar renders a scalar cell: each [[wikilink]] becomes an
+// anchor (or a missing marker) and the surrounding text is escaped.
+func renderFrontmatterScalar(value string, resolver Resolver) string {
+	var b strings.Builder
+	rest := value
+	for {
+		start := strings.Index(rest, "[[")
+		if start < 0 {
+			b.WriteString(html.EscapeString(rest))
+			return b.String()
+		}
+		closing := strings.Index(rest[start+2:], "]]")
+		if closing < 0 {
+			b.WriteString(html.EscapeString(rest))
+			return b.String()
+		}
+		b.WriteString(html.EscapeString(rest[:start]))
+		body := rest[start+2 : start+2+closing]
+		target, alias, anchor := splitWikilink(body)
+		if target == "" {
+			b.WriteString(html.EscapeString(rest[start : start+2+closing+2]))
+		} else {
+			b.WriteString(renderFrontmatterLink(target, alias, anchor, resolver))
+		}
+		rest = rest[start+2+closing+2:]
+	}
+}
+
+// renderFrontmatterLink writes the same anchor/missing marker the body
+// renderer emits, so a frontmatter link and a body link never drift.
+func renderFrontmatterLink(target, alias, anchor string, resolver Resolver) string {
+	label := target
+	if alias != "" {
+		label = alias
+	}
+	href, resolved := resolveFrontmatterHref(target, anchor, resolver)
+	if !resolved {
+		return `<span class="wikilink missing">` + html.EscapeString(label) + `</span>`
+	}
+	return `<a class="wikilink" href="` + html.EscapeString(
+		href,
+	) + `">` + html.EscapeString(label) + `</a>`
+}
+
+// resolveFrontmatterHref mirrors converter.resolve for a raw cell value: the
+// resolver owns the href, and a heading anchor is appended when present.
+func resolveFrontmatterHref(target, anchor string, resolver Resolver) (string, bool) {
+	if resolver == nil {
+		return "", false
+	}
+	href, ok := resolver.Resolve(target)
+	if !ok || href == "" {
+		return "", false
+	}
+	if anchor != "" {
+		return href + "#" + anchor, true
+	}
+	return href, true
 }

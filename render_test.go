@@ -77,6 +77,22 @@ var _ = Describe("Renderer", func() {
 		Expect(out).To(ContainSubstring("<td>status</td><td>active</td>"))
 	})
 
+	It("renders frontmatter wikilinks as links in every stored form", func() {
+		out := render(fixture("frontmatter_wikilinks"))
+		Expect(out).To(ContainSubstring(
+			`<td>goals</td><td><a class="wikilink" href="/p/Page">Page</a></td>`,
+		))
+		Expect(out).To(ContainSubstring(
+			`<td>themes</td><td><a class="wikilink" href="/p/Page">Page</a>, ` +
+				`<span class="wikilink missing">Missing</span></td>`,
+		))
+		Expect(out).To(ContainSubstring(
+			`<td>blocked_by</td><td><a class="wikilink" href="/p/Page">Page</a></td>`,
+		))
+		Expect(out).NotTo(ContainSubstring(`[[Page]]`))
+		Expect(out).NotTo(ContainSubstring(`[[Missing]]`))
+	})
+
 	It("renders a callout, not a plain blockquote", func() {
 		out := render(fixture("page"))
 		Expect(out).To(ContainSubstring(`<div class="callout" data-callout="note">`))
